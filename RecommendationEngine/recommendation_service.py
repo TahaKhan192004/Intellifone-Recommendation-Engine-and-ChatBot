@@ -1,126 +1,119 @@
 # recommendation_service.py
 
-from dotenv import load_dotenv
-from pymongo import MongoClient
-from langchain_google_genai import ChatGoogleGenerativeAI
 import os
+from typing import Any, Dict
+
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
-from typing import AsyncGenerator, Dict, Any
+from pymongo import MongoClient
+
 
 load_dotenv()
 
-# ----------------------------
-# Database Setup
-# ----------------------------
 MONGO_URI = os.getenv("MONGO_CONNECTION_STRING")
 client = MongoClient(MONGO_URI)
 db = client["MobileDB"]
 recommended_collection = db["phones"]
 
-# ----------------------------
-# LLM Setup (Streaming Enabled)
-# ----------------------------
-model = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    api_key=os.getenv("GOOGLE_API_KEY"),
-    streaming=True,
-    temperature=0.3
+
+def ensure_recommendation_indexes():
+    try:
+        recommended_collection.create_index([("price_range", 1)])
+        recommended_collection.create_index([("source_channel", 1)])
+        recommended_collection.create_index([("source_weight", -1)])
+    except Exception as e:
+        print("Recommendation index setup skipped/failed:", e)
+
+
+model = ChatOpenAI(
+    model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+    temperature=0.3,
 )
 
-# ----------------------------
-# Input Schema
-# ----------------------------
+
 class PhoneRecommendationInput(BaseModel):
-    max_price: float = Field(description="Maximum price budget")
-    priority: str = Field(description="User priority (gaming, camera, battery, etc.)")
+    max_price: float = Field(description="Maximum price budget for the phone")
+    priority: str = Field(description="User's priority (e.g., gaming performance, camera, battery life)")
 
 
-# ----------------------------
-# Helper: Fetch Phones
-# ----------------------------
 def fetch_candidate_phones(max_price: float):
     """
-    Fetch phones within ±5000 range of budget.
+    Fetch phones under the user's budget first.
+    If none exist, fall back to nearby phones around the budget.
     """
-    phones = list(
-        recommended_collection.find({
-            "$and": [
-                {"price_range": {"$lte": max_price + 5000}},
-                {"price_range": {"$gte": max_price - 5000}}
-            ]
-        })
-    )
+    phones = list(recommended_collection.find({
+        "price_range": {
+            "$ne": None,
+            "$lte": max_price,
+        }
+    }).sort("price_range", -1).limit(25))
+
+    if not phones:
+        phones = list(recommended_collection.find({
+            "price_range": {
+                "$ne": None,
+                "$gte": max_price - 10000,
+                "$lte": max_price + 5000,
+            }
+        }).sort("price_range", 1).limit(25))
+
     return phones
 
 
-# ----------------------------
-# Helper: Build Prompt
-# ----------------------------
 def build_prompt(max_price: float, priority: str, phones: list) -> str:
     candidates = []
 
     for idx, phone in enumerate(phones, 1):
-        name = phone.get("phone_name", "Unknown Phone")
+        phone_name = phone.get("phone_name", "Unknown Phone")
         desc = phone.get("description", "No description available")
-        price = phone.get("price_range", "Price not available")
+        source_channel = phone.get("source_channel") or "Unknown channel"
+        source_weight = phone.get("source_weight", 1.0)
+        price_range = phone.get("price_range")
+        price_str = str(price_range) if price_range else "Price not available"
+        desc = f"{desc} Source: {source_channel}. Source weight: {source_weight}"
+        candidates.append(f"{idx}. {phone_name} - {desc} - {price_str}")
 
-        candidates.append(f"{idx}. {name} – {desc} – Rs {price}")
+    return f"""
+The user wants a phone with priority: {priority}.
+Their budget is around {max_price}.
 
-    prompt = f"""
-You are a mobile phone expert.
-
-User requirement:
-- Budget: Rs {int(max_price)}
-- Priority: {priority}
-
-Candidate phones:
+Here are some candidate phones:
 {chr(10).join(candidates)}
 
 Instructions:
-- Rank phones based on priority
-- Clearly explain why each phone fits or does not fit
-- Keep response clean and structured
-- Use "->" for headings
-- Use short paragraphs
-- Avoid markdown symbols like * or **
-- Use Rs format like: Rs 70,000
+1. Rank these phones based on how well they match the user's priority.
+2. For each ranked phone, explain why it is a good (or not so good) match.
+3. If no phone exactly matches the priority, recommend phones with generally good specs and justify why they are still strong alternatives.
+4. Provide the final ranked list in a clear, user-friendly format.
+Always use the currency Rs instead of writing any other currency symbol.
 
-Provide a clean ranked recommendation list.
+Format prices like this: Rs 70,000, Rs 80,000 (with commas).
+
+use -> for headings.
+
+Use **bold text** for phone names, prices, and key points.
+
+Use *italic text* only for emphasis, not headings.
+
+Present lists  numbered lists where appropriate.
+
+Ensure consistent spacing and clean line breaks between sections.
+
+Do not use * .
+
+Avoid emojis; keep the tone professional and informative.
+
+Keep explanations concise and structured in short paragraphs.
 """
 
-    return prompt
 
-
-# ----------------------------
-# Streaming Recommendation
-# ----------------------------
-# async def stream_recommendations(max_price: float, priority: str) -> AsyncGenerator[str, None]:
-#     """
-#     Stream recommendations token by token.
-#     """
-
-#     phones = fetch_candidate_phones(max_price)
-
-#     if not phones:
-#         async def empty():
-#             yield "No phones found in this price range."
-#         return empty()
-
-#     prompt = build_prompt(max_price, priority, phones)
-
-#     async def generator():
-#         full_response = ""
-
-#         async for chunk in model.astream(prompt):
-#             if chunk.content:
-#                 full_response += chunk.content
-#                 print(f"Streaming chunk: {chunk.content}")  # Debug log
-#                 yield chunk.content
-
-#         # (Optional) You can log or store full_response here if needed
-
-#     return generator()
 async def stream_recommendations(max_price: float, priority: str):
+    """
+    Stream recommendation text chunk by chunk using DeepSeek.
+    """
     phones = fetch_candidate_phones(max_price)
 
     if not phones:
@@ -133,23 +126,17 @@ async def stream_recommendations(max_price: float, priority: str):
         if hasattr(chunk, "content") and chunk.content:
             yield chunk.content
 
-# ----------------------------
-# Non-Streaming Fallback
-# ----------------------------
+
 def get_recommendations(max_price: float, priority: str) -> Dict[str, Any]:
     """
-    Standard (non-streaming) recommendation response.
+    Standard non-streaming recommendation response.
     """
-
     phones = fetch_candidate_phones(max_price)
 
     if not phones:
         return {"recommendations": "No phones found in this price range."}
 
     prompt = build_prompt(max_price, priority, phones)
-
     response = model.invoke(prompt)
 
-    return {
-        "recommendations": response.content
-    }
+    return {"recommendations": response.content}

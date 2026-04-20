@@ -1,13 +1,12 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
 import os
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 import re
-from typing import AsyncGenerator
-from RecommendationEngine.recommendation_service import stream_recommendations
 
-# ----------------------------
-# System Prompt
-# ----------------------------
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+
+from RecommendationEngine.recommendation_service import get_recommendations, stream_recommendations
+
+
 SYSTEM_PROMPT = """
 You are a mobile phone expert assistant.
 
@@ -18,52 +17,58 @@ You ONLY answer questions related to:
 - mobile diagnostics and pricing
 
 If the question is unrelated, politely refuse.
+use -> for headings.
 
-Formatting rules:
-- Use -> for headings
-- Use short paragraphs
-- Use clean spacing
-- Avoid markdown symbols like * or **
-- Use simple readable formatting
+Use **bold text** for phone names, prices, and key points.
+
+Use *italic text* only for emphasis, not headings.
+
+Present lists  numbered lists where appropriate.
+
+Ensure consistent spacing and clean line breaks between sections.
+
+Do not use * .
+
+Avoid emojis; keep the tone professional and informative.
+
+Keep explanations concise and structured in short paragraphs.
 """
 
-# ----------------------------
-# LLM (Streaming Enabled)
-# ----------------------------
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0.3,
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
-    streaming=True
-)
 
-# ----------------------------
-# Extract Budget & Priority
-# ----------------------------
+def create_llm():
+    return ChatOpenAI(
+        model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        temperature=0.3,
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+    )
+
+
 def extract_budget_and_priority(message: str):
-    budget_match = re.search(r'(\d{2,6})', message.replace(",", ""))
+    """
+    Extract budget and priority from a recommendation-style user message.
+    """
+    budget_match = re.search(r"(\d{2,6})", message.replace(",", ""))
     max_price = float(budget_match.group(1)) if budget_match else 70000
 
     priorities = {
         "gaming": ["gaming", "performance", "fps"],
         "camera": ["camera", "photography", "selfie"],
         "battery": ["battery", "backup", "mah"],
-        "general": ["all round", "balanced", "daily use"]
+        "general": ["all round", "balanced", "daily use"],
     }
 
     priority = "general"
+    message_lower = message.lower()
 
     for key, words in priorities.items():
-        if any(word in message.lower() for word in words):
+        if any(word in message_lower for word in words):
             priority = key
             break
 
     return max_price, priority
 
 
-# ----------------------------
-# Intent Detection
-# ----------------------------
 def is_recommendation_query(message: str) -> bool:
     keywords = [
         "recommend",
@@ -73,16 +78,13 @@ def is_recommendation_query(message: str) -> bool:
         "best phone",
         "which phone",
         "buy",
-        "purchase"
+        "purchase",
     ]
 
     message = message.lower()
     return any(keyword in message for keyword in keywords)
 
 
-# ----------------------------
-# Build Messages
-# ----------------------------
 def build_messages(chat_history, user_message):
     messages = [SystemMessage(content=SYSTEM_PROMPT)]
 
@@ -96,12 +98,10 @@ def build_messages(chat_history, user_message):
     return messages
 
 
-# ----------------------------
-# Streaming Chat Generator
-# ----------------------------
 async def generate_stream_reply(chat_history, user_message):
-
-    # 🔀 Recommendation Flow
+    """
+    Stream chatbot output. Recommendation queries stream from the recommendation engine.
+    """
     if is_recommendation_query(user_message):
         max_price, priority = extract_budget_and_priority(user_message)
 
@@ -109,36 +109,29 @@ async def generate_stream_reply(chat_history, user_message):
             yield chunk
         return
 
-    # 🤖 Normal Chat Flow
     messages = build_messages(chat_history, user_message)
+    llm = create_llm()
 
     async for chunk in llm.astream(messages):
         if hasattr(chunk, "content") and chunk.content:
             yield chunk.content
 
 
-# ----------------------------
-# Non-Streaming Fallback (Optional)
-# ----------------------------
 def generate_reply(chat_history, user_message):
+    """
+    Non-streaming chatbot response used by the current /chat endpoint.
+    """
     if is_recommendation_query(user_message):
-        from RecommendationEngine.recommendation_service import get_recommendations
         max_price, priority = extract_budget_and_priority(user_message)
 
         rec_response = get_recommendations(
             max_price=max_price,
-            priority=priority
+            priority=priority,
         )
 
         return rec_response["recommendations"]
 
-    llm_sync = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        temperature=0.3,
-        google_api_key=os.getenv("GOOGLE_API_KEY")
-    )
-
+    llm = create_llm()
     messages = build_messages(chat_history, user_message)
-
-    response = llm_sync.invoke(messages)
+    response = llm.invoke(messages)
     return response.content
