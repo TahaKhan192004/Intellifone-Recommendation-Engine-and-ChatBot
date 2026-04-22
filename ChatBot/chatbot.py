@@ -10,7 +10,6 @@ from SpecsFetcher.specs_service import fetch_mobile_specs
 from models import MobileSpecsRequest, MobileSpecsResponse
 
 
-
 SYSTEM_PROMPT = """
 You are a mobile phone expert assistant.
 
@@ -30,7 +29,11 @@ Use *italic text* only for emphasis, not headings.
 Present lists  numbered lists where appropriate.
 
 Ensure consistent spacing and clean line breaks between sections.
-
+  
+Use the currency Rs instead of writing any other currency symbol.
+Format prices like this: Rs 70,000, Rs 80,000 (with commas).
+suggest marketplaces like daraz, priceoye and official brand stores for buying phones in Pakistan.
+If price appears in dollars or any other currency, convert it to Pakistani Rupees (Rs) using a conversion rate of 1 USD = Rs 280. Always use the converted price in your response.
 Do not use * .
 
 Avoid emojis; keep the tone professional and informative.
@@ -49,41 +52,51 @@ def create_llm():
 
 
 # ---------------------------------------------------------------------------
-# Query classifiers
+# Unified intent classifier
 # ---------------------------------------------------------------------------
 
-def is_recommendation_query(message: str) -> bool:
-    keywords = [
-        "recommend",
-        "recommendation",
-        "suggest",
-        "suggestion",
-        "best phone",
-        "which phone",
-        "buy",
-        "purchase",
-    ]
-    return any(keyword in message.lower() for keyword in keywords)
+def classify_intent(message: str) -> str:
+    """
+    Classifies the user message into one of three intents:
+      'recommendation' | 'specs' | 'general'
 
+    Priority order: recommendation > specs > general
+    This prevents greedy specs keywords (camera, battery) from
+    hijacking recommendation queries like "best camera phone under 50k".
+    """
+    msg = message.lower()
 
-def is_specs_query(message: str) -> bool:
-    keywords = [
-        "specs",
-        "specifications",
-        "features",
-        "display",
-        "camera specs",
-        "battery",
-        "chipset",
-        "processor",
-        "ram",
-        "storage",
-        "tell me about",
-        "details about",
-        "info about",
-        "compare",
+    # --- Recommendation (highest priority) ---
+    rec_keywords = [
+        "recommend", "recommendation", "suggest", "suggestion",
+        "best phone", "which phone", "buy", "purchase",
+        "should i get", "worth buying", "good phone",
+        "under", "budget", "affordable", "cheap",
     ]
-    return any(keyword in message.lower() for keyword in keywords)
+    if any(kw in msg for kw in rec_keywords):
+        return "recommendation"
+
+    # --- Specs (only when a known brand or explicit specs keyword is present) ---
+    specs_keywords = [
+        "specs", "specifications", "tell me about", "details about",
+        "info about", "compare", "display", "chipset", "processor",
+        "ram", "storage", "camera specs",
+    ]
+    known_brands = [
+        "samsung", "apple", "iphone", "pixel",
+        "xiaomi", "oppo", "vivo", "realme",
+        "oneplus", "huawei", "google", "nokia",
+        "motorola", "sony", "asus", "lenovo",
+        "lg", "tecno", "infinix", "itel",
+    ]
+
+    has_specs_keyword = any(kw in msg for kw in specs_keywords)
+    has_brand = any(brand in msg for brand in known_brands)
+
+    if has_specs_keyword or has_brand:
+        return "specs"
+
+    return "general"
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +141,11 @@ def extract_brand_and_model(message: str):
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     known_brands = [
-        "samsung", "apple", "xiaomi", "oppo", "vivo", "realme",
-        "oneplus", "huawei", "google", "nokia", "motorola", "sony",
-        "asus", "lenovo", "lg", "tecno", "infinix", "itel",
+        "samsung", "apple", "iphone", "pixel",
+        "xiaomi", "oppo", "vivo", "realme",
+        "oneplus", "huawei", "google", "nokia",
+        "motorola", "sony", "asus", "lenovo",
+        "lg", "tecno", "infinix", "itel",
     ]
 
     cleaned_lower = cleaned.lower()
@@ -224,14 +239,16 @@ def generate_reply(chat_history, user_message):
     """
     Non-streaming chatbot response used by the /chat endpoint.
     """
+    intent = classify_intent(user_message)
+
     # --- Recommendation branch ---
-    if is_recommendation_query(user_message):
+    if intent == "recommendation":
         max_price, priority = extract_budget_and_priority(user_message)
         rec_response = get_recommendations(max_price=max_price, priority=priority)
         return rec_response["recommendations"]
 
     # --- Specs branch ---
-    if is_specs_query(user_message):
+    if intent == "specs":
         brand, model = extract_brand_and_model(user_message)
 
         if brand and model:
@@ -261,15 +278,17 @@ async def generate_stream_reply(chat_history, user_message):
     """
     Streaming chatbot response. Handles recommendations, specs, and general queries.
     """
+    intent = classify_intent(user_message)
+
     # --- Recommendation branch ---
-    if is_recommendation_query(user_message):
+    if intent == "recommendation":
         max_price, priority = extract_budget_and_priority(user_message)
         async for chunk in stream_recommendations(max_price, priority):
             yield chunk
         return
 
     # --- Specs branch ---
-    if is_specs_query(user_message):
+    if intent == "specs":
         brand, model = extract_brand_and_model(user_message)
 
         if brand and model:
