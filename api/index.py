@@ -16,6 +16,8 @@ from models import UsedMobile
 from fastapi.responses import StreamingResponse
 from RecommendationEngine.recommendation_service import get_recommendations,stream_recommendations
 from models import ChatRequest, ChatResponse, ChatHistoryResponse
+from SpecsFetcher.specs_service import ensure_specs_cache_indexes, fetch_mobile_specs
+from models import MobileSpecsRequest, MobileSpecsResponse, UsedMobile
 from ChatBot.chatbot import generate_reply,generate_stream_reply
 from ChatBot.crud import (
     create_conversation,
@@ -27,6 +29,21 @@ from ChatBot.crud import (
 
 app = FastAPI(title="IntelliFone AI Backend")
 
+#new endpoint 
+@app.post("/mobile-specs/", response_model=MobileSpecsResponse)
+async def mobile_specs(payload: MobileSpecsRequest):
+    try:
+        return fetch_mobile_specs(
+            payload.brand.strip(),
+            payload.model.strip(),
+            refresh=payload.refresh,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch specs: {str(e)}")
 
 
 ##### New Streaming Versions

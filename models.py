@@ -1,3 +1,5 @@
+import datetime
+
 from pydantic import BaseModel
 from typing import Optional
 import typing
@@ -47,3 +49,51 @@ class UsedMobile(BaseModel):
     listing_source: Optional[str] = None     
     images: Optional[list[str]] = None
     post_date: Optional[str] = None
+
+class MobileSpecsRequest(BaseModel):
+    brand: str
+    model: str
+    refresh: bool = False
+
+class NewMobile(BaseModel):
+    brand: Optional[str] = None
+    model: Optional[str] = None
+
+    ram: Optional[str] = None
+    storage: Optional[str] = None
+    os: Optional[str] = None
+    release_year: Optional[int] = None
+
+    screen_size: Optional[str] = None
+    screen_resolution: Optional[str] = None
+
+    battery_capacity: Optional[str] = None
+
+    main_camera: Optional[str] = None
+    selfie_camera: Optional[str] = None
+
+    chipset: Optional[str] = None
+    cpu: Optional[str] = None
+    gpu: Optional[str] = None
+
+    network: Optional[str] = None
+    network_bands: Optional[str] = None
+
+    sim: Optional[str] = None
+
+    weight: Optional[str] = None
+    dimensions: Optional[str] = None
+
+    usb: Optional[str] = None
+    sensors: Optional[str] = None
+
+    price: Optional[str] = None    
+
+
+class MobileSpecsResponse(BaseModel):
+    brand: str
+    model: str
+    gsmarena_url: Optional[str] = None
+    specs: NewMobile
+    cached: bool
+    updated_at: Optional[datetime.datetime] = None
