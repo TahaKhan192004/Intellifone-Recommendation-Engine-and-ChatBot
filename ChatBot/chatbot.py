@@ -103,25 +103,43 @@ def classify_intent(message: str) -> str:
 # Extraction helpers
 # ---------------------------------------------------------------------------
 
-def extract_budget_and_priority(message: str):
+def extract_budget_and_priority(message: str) -> tuple:
     """
     Extract budget and priority from a recommendation-style user message.
+    Handles formats: 100K, 100k, 1L, 1lac, 1lakh, Rs 100,000, 100000
     """
-    budget_match = re.search(r"(\d{2,6})", message.replace(",", ""))
-    max_price = float(budget_match.group(1)) if budget_match else 70000
+    msg = message.replace(",", "").lower()
 
+    budget_match = None
+    max_price = 70000.0  # default fallback
+
+    # 1. Match shorthand like 100k, 50K, 1.5k
+    k_match = re.search(r"(\d+(?:\.\d+)?)\s*k\b", msg)
+
+    # 2. Match lakh shorthand: 1l, 1L, 1lac, 1lakh, 1.5lakh
+    lakh_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:l\b|lac\b|lakh\b|lakhs\b)", msg)
+
+    # 3. Match plain numbers: 100000, 70000
+    plain_match = re.search(r"\b(\d{4,7})\b", msg)
+
+    if lakh_match:
+        max_price = float(lakh_match.group(1)) * 100_000
+    elif k_match:
+        max_price = float(k_match.group(1)) * 1_000
+    elif plain_match:
+        max_price = float(plain_match.group(1))
+
+    # --- Priority detection (unchanged) ---
     priorities = {
-        "gaming": ["gaming", "performance", "fps"],
-        "camera": ["camera", "photography", "selfie","megapixel","main camera","front camera","mp"],
+        "gaming":  ["gaming", "performance", "fps"],
+        "camera":  ["camera", "photography", "selfie", "megapixel", "main camera", "front camera", "mp"],
         "battery": ["battery", "backup", "mah"],
         "general": ["all round", "balanced", "daily use"],
     }
 
     priority = "general"
-    message_lower = message.lower()
-
     for key, words in priorities.items():
-        if any(word in message_lower for word in words):
+        if any(word in msg for word in words):
             priority = key
             break
 

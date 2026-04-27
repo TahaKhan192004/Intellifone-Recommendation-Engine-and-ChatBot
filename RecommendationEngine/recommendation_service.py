@@ -88,6 +88,7 @@ Instructions:
 2. For each ranked phone, explain why it is a good (or not so good) match.
 3. If no phone exactly matches the priority, recommend phones with generally good specs and justify why they are still strong alternatives.
 4. Provide the final ranked list in a clear, user-friendly format.
+5- Return only the list of Top 5 phones in the range
 Always use the currency Rs instead of writing any other currency symbol.
 
 Format prices like this: Rs 70,000, Rs 80,000 (with commas).
