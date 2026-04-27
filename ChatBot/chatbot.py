@@ -69,9 +69,9 @@ def classify_intent(message: str) -> str:
     # --- Recommendation (highest priority) ---
     rec_keywords = [
         "recommend", "recommendation", "suggest", "suggestion",
-        "best phone", "which phone", "buy", "purchase",
-        "should i get", "worth buying", "good phone",
-        "under", "budget", "affordable", "cheap",
+        "best phone", "which phone", "buy", "purchase","give", "advice",
+        "should i get", "worth buying", "good phone","40K", "100K","200K","good phone", "best value","good", "excellent", 
+        "under", "budget", "affordable", "cheap","80K", "70K", "60K", "50K", "40K", "30K", "20K", "300K","100K","150K","250K","110K","120K","140K","150K","180K","220K","250K","300K",
     ]
     if any(kw in msg for kw in rec_keywords):
         return "recommendation"
@@ -112,7 +112,7 @@ def extract_budget_and_priority(message: str):
 
     priorities = {
         "gaming": ["gaming", "performance", "fps"],
-        "camera": ["camera", "photography", "selfie"],
+        "camera": ["camera", "photography", "selfie","megapixel","main camera","front camera","mp"],
         "battery": ["battery", "backup", "mah"],
         "general": ["all round", "balanced", "daily use"],
     }
